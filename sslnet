@@ -1,0 +1,54 @@
+#!/usr/bin/env python3
+import sys, os, socket, ssl, atexit, fcntl, argparse
+import traceback
+import selectors
+
+def setup(host, port):
+    '''Set up the socket, the ssl socket, and enable nonblock mode on stdin.'''
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    atexit.register(sock.close)
+    sslsock = ssl.wrap_socket(sock)
+    atexit.register(sslsock.close)
+    sslsock.connect((host, port))
+    orig_fl = fcntl.fcntl(sys.stdin, fcntl.F_GETFL)
+    fcntl.fcntl(sys.stdin, fcntl.F_SETFL, orig_fl | os.O_NONBLOCK)
+    return sslsock
+
+def readstdin(stdin, data):
+    '''Nonblockingly read from stdin.
+This function gets a reference to all file objects in data in order to avoid global references.'''
+    sock = data[1]
+    line = stdin.read()
+    try:
+        sock.sendall(line.encode())
+    except:
+        exit()
+
+def readsock(sock, data):
+    '''Nonblockingly read from ssl and send to stdout.
+selectors only comes here once there is some data to read.'''
+    line = sock.recv().decode()
+    if line:
+        sys.stdout.write(line)
+        sys.stdout.flush()
+
+def main():
+    '''Parse for arguments nicely, then register with a selector and loop until death.
+The exit() call in readstdin will allow the atexit registered handles to close things down nicely.'''
+    parser = argparse.ArgumentParser()
+    parser.add_argument('hostname', help='hostname to connect to via SSL')
+    parser.add_argument('port', type=int, help='port to connect to via SSL')
+    args = parser.parse_args()
+
+    sslsock = setup(args.hostname,args.port)
+    sel = selectors.DefaultSelector()
+    sel.register(sslsock, selectors.EVENT_READ, (readsock,sslsock,sys.stdin))
+    sel.register(sys.stdin, selectors.EVENT_READ, (readstdin,sslsock,sys.stdin))
+    while True:
+        events = sel.select()
+        for key, mask in events:
+            callback = key.data
+            callback[0](key.fileobj, callback)
+
+if __name__ == '__main__':
+    main()
