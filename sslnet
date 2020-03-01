@@ -3,6 +3,8 @@ import sys, os, socket, ssl, atexit, fcntl, argparse
 import traceback
 import selectors
 
+ENCODING='latin-1'
+
 def setup(host, port):
     '''Set up the socket, the ssl socket, and enable nonblock mode on stdin.'''
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -10,6 +12,7 @@ def setup(host, port):
     sslsock = ssl.wrap_socket(sock)
     atexit.register(sslsock.close)
     sslsock.connect((host, port))
+    sslsock.settimeout(30)
     orig_fl = fcntl.fcntl(sys.stdin, fcntl.F_GETFL)
     fcntl.fcntl(sys.stdin, fcntl.F_SETFL, orig_fl | os.O_NONBLOCK)
     return sslsock
@@ -20,17 +23,20 @@ This function gets a reference to all file objects in data in order to avoid glo
     sock = data[1]
     line = stdin.read()
     try:
-        sock.sendall(line.encode())
+        sock.sendall(line.encode(ENCODING,errors='ignore'))
     except:
         exit()
 
 def readsock(sock, data):
     '''Nonblockingly read from ssl and send to stdout.
 selectors only comes here once there is some data to read.'''
-    line = sock.recv().decode()
-    if line:
+    data = sock.recv()
+    line = data.decode(ENCODING)
+    if len(data) > 0:
         sys.stdout.write(line)
         sys.stdout.flush()
+    else:
+        exit()
 
 def main():
     '''Parse for arguments nicely, then register with a selector and loop until death.
@@ -45,6 +51,7 @@ The exit() call in readstdin will allow the atexit registered handles to close t
     sel.register(sslsock, selectors.EVENT_READ, (readsock,sslsock,sys.stdin))
     sel.register(sys.stdin, selectors.EVENT_READ, (readstdin,sslsock,sys.stdin))
     while True:
+#    while sslsock.fileno() >= 0:
         events = sel.select()
         for key, mask in events:
             callback = key.data
